@@ -8,21 +8,35 @@ export const HEIGHT = 2.8
 const N = NX * NY
 // One resolution control. In this confined 2D cell, halving diameter requires
 // four times the samples, not eight. Their combined physical mass stays fixed.
-export const PARTICLE_DIAMETER = .024
+export const PARTICLE_DIAMETER = .036
 const PARTICLE_SCALE = PARTICLE_DIAMETER / .048
-export const DIGIT_PARTICLES = Math.round(340 / PARTICLE_SCALE ** 2)
-export const COLON_PARTICLES = Math.round(40 / PARTICLE_SCALE ** 2)
+export const DIGIT_PARTICLES = Math.round(300 / PARTICLE_SCALE ** 2)
+export const COLON_PARTICLES = 8
 export const COLON_START = DIGIT_PARTICLES * 2
 export const PARTICLES = DIGIT_PARTICLES * 4 + COLON_PARTICLES
-const PARTICLE_MASS = 1568 / PARTICLES
+const PARTICLE_MASS = 1068 / PARTICLES
 const COHESION_RANGE = .06 * PARTICLE_SCALE
-const SPLAT_RADIUS = Math.max(3.2, 6.4 * PARTICLE_SCALE)
+const SPLAT_RADIUS = 10
 const CELL = .075 * PARTICLE_SCALE
 const COLS = Math.ceil(WIDTH / CELL)
 const ROWS = Math.ceil(HEIGHT / CELL)
+
 const patterns = ['abcdef', 'bc', 'abged', 'abgcd', 'fgbc', 'afgcd', 'afgecd', 'abc', 'abcdefg', 'abcdfg']
-type Coil = { x: number; y: number; digit: number; segment: string; current: number; target: number; gain: number }
-export function formatTime(date: Date) { return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` }
+
+type Coil = {
+  x: number;
+  y: number;
+  digit: number;
+  segment: string;
+  current: number;
+  target: number;
+  gain: number
+}
+
+export function formatTime(date: Date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 export class Fluid {
   readonly height = new Float64Array(SURFACE_NX * SURFACE_NY)
   readonly potential = new Float64Array(N)
