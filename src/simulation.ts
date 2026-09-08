@@ -1,27 +1,46 @@
-// Clock patterns drive fixed coils only. No digit data enters the fluid solver.
-export const NX = 256
-export const NY = 112
-export const SURFACE_NX = NX * 2
-export const SURFACE_NY = NY * 2
-export const WIDTH = 6.4
-export const HEIGHT = 2.8
-const N = NX * NY
-// One resolution control. In this confined 2D cell, halving diameter requires
-// four times the samples, not eight. Their combined physical mass stays fixed.
-export const PARTICLE_DIAMETER = .036
-const PARTICLE_SCALE = PARTICLE_DIAMETER / .048
-export const DIGIT_PARTICLES = Math.round(300 / PARTICLE_SCALE ** 2)
-export const COLON_PARTICLES = 8
-export const COLON_START = DIGIT_PARTICLES * 2
-export const PARTICLES = DIGIT_PARTICLES * 4 + COLON_PARTICLES
-const PARTICLE_MASS = 1068 / PARTICLES
-const COHESION_RANGE = .06 * PARTICLE_SCALE
-const SPLAT_RADIUS = 10
-const CELL = .075 * PARTICLE_SCALE
-const COLS = Math.ceil(WIDTH / CELL)
-const ROWS = Math.ceil(HEIGHT / CELL)
+import {
+  CELL_SIZE,
+  COHESION_RANGE,
+  COLON_BAY_BOUNDS,
+  COLON_PARTICLE_COUNT,
+  COLON_PARTICLE_START,
+  COLON_POSITIONS,
+  COILS_PER_DIGIT,
+  COLLISION_COLUMNS,
+  COLLISION_ROWS,
+  DIGIT_BAY_BOUNDS,
+  DIGIT_CENTERS,
+  DIGIT_PARTICLE_COUNT,
+  DIGIT_PATTERNS,
+  GRID_COLUMNS,
+  GRID_ROWS,
+  GRID_SIZE,
+  COIL_SAMPLES_PER_SEGMENT,
+  FIELD_UPDATE_RATE,
+  PARTICLE_UPDATE_RATE,
+  PARTICLE_COUNT,
+  PARTICLE_DIAMETER,
+  PARTICLE_MASS,
+  PARTICLE_SCALE,
+  SEGMENT_ENDPOINTS,
+  SPLAT_RADIUS,
+  SURFACE_COLUMNS,
+  SURFACE_ROWS,
+  WORLD_HEIGHT,
+  WORLD_WIDTH,
+} from './constants.ts'
 
-const patterns = ['abcdef', 'bc', 'abged', 'abgcd', 'fgbc', 'afgcd', 'afgecd', 'abc', 'abcdefg', 'abcdfg']
+// Re-export the simulation's public dimensions and counts for existing callers.
+export {
+  COLON_PARTICLE_START,
+  DIGIT_PARTICLE_COUNT,
+  PARTICLE_COUNT,
+  PARTICLE_DIAMETER,
+  SURFACE_COLUMNS,
+  SURFACE_ROWS,
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+} from './constants.ts'
 
 type Coil = {
   x: number;
@@ -37,22 +56,23 @@ export function formatTime(date: Date) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
+// Fluid state and lifecycle
 export class Fluid {
-  readonly height = new Float64Array(SURFACE_NX * SURFACE_NY)
-  readonly potential = new Float64Array(N)
-  private reach = new Float64Array(N)
-  readonly x = new Float64Array(PARTICLES)
-  readonly y = new Float64Array(PARTICLES)
-  private vx = new Float64Array(PARTICLES)
-  private vy = new Float64Array(PARTICLES)
-  private oldX = new Float64Array(PARTICLES)
-  private oldY = new Float64Array(PARTICLES)
-  private heads = new Int32Array(COLS * ROWS)
-  private next = new Int32Array(PARTICLES)
-  private bayLeft = new Float64Array(PARTICLES)
-  private bayRight = new Float64Array(PARTICLES)
-  private diameter = new Float64Array(PARTICLES)
-  readonly texture = new Float32Array(SURFACE_NX * SURFACE_NY * 2)
+  readonly height = new Float64Array(SURFACE_COLUMNS * SURFACE_ROWS)
+  readonly potential = new Float64Array(GRID_SIZE)
+  private reach = new Float64Array(GRID_SIZE)
+  readonly x = new Float64Array(PARTICLE_COUNT)
+  readonly y = new Float64Array(PARTICLE_COUNT)
+  private vx = new Float64Array(PARTICLE_COUNT)
+  private vy = new Float64Array(PARTICLE_COUNT)
+  private oldX = new Float64Array(PARTICLE_COUNT)
+  private oldY = new Float64Array(PARTICLE_COUNT)
+  private heads = new Int32Array(COLLISION_COLUMNS * COLLISION_ROWS)
+  private next = new Int32Array(PARTICLE_COUNT)
+  private bayLeft = new Float64Array(PARTICLE_COUNT)
+  private bayRight = new Float64Array(PARTICLE_COUNT)
+  private diameter = new Float64Array(PARTICLE_COUNT)
+  readonly texture = new Float32Array(SURFACE_COLUMNS * SURFACE_ROWS * 2)
   readonly coils: Coil[] = []
   readonly initialMass: number
   private readonly kernels: { weights: Float32Array; reaches: Float32Array }[] = []
@@ -71,33 +91,49 @@ export class Fluid {
   showField = false
   constructor(clock: () => Date = () => new Date()) {
     this.clock = clock
-    const segments: Record<string, number[]> = {
-      a: [-.36, .76, .36, .76], b: [.4, .69, .4, .07], c: [.4, -.07, .4, -.69],
-      d: [-.36, -.76, .36, -.76], e: [-.4, -.07, -.4, -.69], f: [-.4, .69, -.4, .07], g: [-.36, 0, .36, 0],
-    }
-    for (const [digit, center] of [-2.22, -.94, .94, 2.22].entries()) {
-      for (const [segment, [x1, y1, x2, y2]] of Object.entries(segments)) {
-        for (let k = 0; k < 9; k++) this.coils.push({ x: center + x1 + (x2 - x1) * k / 8, y: y1 + (y2 - y1) * k / 8, digit, segment, current: 0, target: 0, gain: 1 })
+    for (const [digit, center] of DIGIT_CENTERS.entries()) {
+      for (const [segment, [x1, y1, x2, y2]] of Object.entries(SEGMENT_ENDPOINTS)) {
+        for (let sample = 0; sample < COIL_SAMPLES_PER_SEGMENT; sample++) {
+          this.coils.push({
+            x: center + x1 + (x2 - x1) * sample / (COIL_SAMPLES_PER_SEGMENT - 1),
+            y: y1 + (y2 - y1) * sample / (COIL_SAMPLES_PER_SEGMENT - 1),
+            digit,
+            segment,
+            current: 0,
+            target: 0,
+            gain: 1,
+          })
+        }
       }
     }
-    for (const y of [-.27, .27]) this.coils.push({ x: 0, y, digit: -1, segment: '', current: 0, target: 1, gain: 1 })
+    for (const y of COLON_POSITIONS) {
+      this.coils.push({ x: 0, y, digit: -1, segment: '', current: 0, target: 1, gain: 1 })
+    }
     for (const coil of this.coils) {
-      const weights = new Float32Array(N), reaches = new Float32Array(N)
-      const limits = coil.digit === -1 ? [-.32, .32] : [[-3.2, -1.6], [-1.6, -.32], [.32, 1.6], [1.6, 3.2]][coil.digit]
-      for (let y = 0; y < NY; y++) for (let x = 0; x < NX; x++) {
-        const worldX = (x + .5) / NX * WIDTH - WIDTH / 2
-        if (worldX < limits[0] || worldX > limits[1]) continue
-        const dx = (x + .5) / NX * WIDTH - WIDTH / 2 - coil.x, dy = (y + .5) / NY * HEIGHT - HEIGHT / 2 - coil.y
-        const r2 = dx * dx + dy * dy
-        const weight = .205 * Math.exp(-r2 / .013) + .012 * Math.exp(-r2 / .35)
-        const reach = .045 * Math.exp(-r2 / 1.3)
-        weights[y * NX + x] = coil.digit === -1 ? weight * 3.4 : weight
-        reaches[y * NX + x] = reach
+      const weights = new Float32Array(GRID_SIZE), reaches = new Float32Array(GRID_SIZE)
+      const limits = coil.digit === -1 ? COLON_BAY_BOUNDS : DIGIT_BAY_BOUNDS[coil.digit]
+      for (let y = 0; y < GRID_ROWS; y++) {
+        for (let x = 0; x < GRID_COLUMNS; x++) {
+          const worldX = (x + .5) / GRID_COLUMNS * WORLD_WIDTH - WORLD_WIDTH / 2
+          if (worldX < limits[0] || worldX > limits[1]) continue
+          const dx = worldX - coil.x, dy = (y + .5) / GRID_ROWS * WORLD_HEIGHT - WORLD_HEIGHT / 2 - coil.y
+          const r2 = dx * dx + dy * dy
+          const weight = .205 * Math.exp(-r2 / .013) + .012 * Math.exp(-r2 / .35)
+          const reach = .045 * Math.exp(-r2 / 1.3)
+          weights[y * GRID_COLUMNS + x] = coil.digit === -1 ? weight * 3.4 : weight
+          reaches[y * GRID_COLUMNS + x] = reach
+        }
       }
       this.kernels.push({ weights, reaches })
     }
     // One finite charge in the visible bottom reservoir of the upright cell.
-    const bays = [[-3.17, -1.60, DIGIT_PARTICLES], [-1.60, -.32, DIGIT_PARTICLES], [-.32, .32, COLON_PARTICLES], [.32, 1.60, DIGIT_PARTICLES], [1.60, 3.17, DIGIT_PARTICLES]]
+    const bays = [
+      [...DIGIT_BAY_BOUNDS[0], DIGIT_PARTICLE_COUNT],
+      [...DIGIT_BAY_BOUNDS[1], DIGIT_PARTICLE_COUNT],
+      [...COLON_BAY_BOUNDS, COLON_PARTICLE_COUNT],
+      [...DIGIT_BAY_BOUNDS[2], DIGIT_PARTICLE_COUNT],
+      [...DIGIT_BAY_BOUNDS[3], DIGIT_PARTICLE_COUNT],
+    ] as const
     let particle = 0
     for (const [left, right, count] of bays) {
       const columns = Math.floor((right - left - .09) / (.045 * PARTICLE_SCALE))
@@ -107,7 +143,7 @@ export class Fluid {
         this.y[particle] = -1.36 + row * .039 * PARTICLE_SCALE
         this.bayLeft[particle] = left + .023
         this.bayRight[particle] = right - .023
-        this.diameter[particle] = count === COLON_PARTICLES ? .055 * PARTICLE_SCALE : PARTICLE_DIAMETER
+        this.diameter[particle] = count === COLON_PARTICLE_COUNT ? .055 * PARTICLE_SCALE : PARTICLE_DIAMETER
       }
     }
     this.initialMass = this.mass()
@@ -117,13 +153,15 @@ export class Fluid {
   advance() { this.offset += 60000 }
   resetTime() { this.offset = 0 }
   mass() { return this.x.length * PARTICLE_MASS }
+
+  // Magnetic field construction
   private updateCoils(dt: number) {
     this.time = formatTime(new Date(this.clock().getTime() + this.offset))
     if (this.time !== this.previousPattern || this.released !== this.previousRelease) {
       const digits = this.time.replace(':', '')
       this.seed = Math.random() * 1000
       for (const coil of this.coils) {
-        const target = this.released ? 0 : coil.digit === -1 || patterns[Number(digits[coil.digit])].includes(coil.segment) ? 1 : 0
+        const target = this.released ? 0 : coil.digit === -1 || DIGIT_PATTERNS[Number(digits[coil.digit])].includes(coil.segment) ? 1 : 0
         if (target !== coil.target) coil.gain = .985 + Math.random() * .03
         coil.target = target
       }
@@ -152,17 +190,20 @@ export class Fluid {
       const tremor = 1 + activity * (.065 * Math.sin(phase * 1.8 + c * .47) + .025 * Math.sin(phase * 2.7 + c * .81 + this.seed))
       const { weights, reaches } = this.kernels[c]
       const current = coil.current * coil.gain * tremor
-      for (let y = 0; y < NY; y += 2) for (let x = 0; x < NX; x += 2) {
-        const k = y * NX + x
-        this.potential[k] += weights[k] * current
-        this.reach[k] += reaches[k] * coil.current
+      for (let y = 0; y < GRID_ROWS; y += 2) {
+        for (let x = 0; x < GRID_COLUMNS; x += 2) {
+          const k = y * GRID_COLUMNS + x
+          this.potential[k] += weights[k] * current
+          this.reach[k] += reaches[k] * coil.current
+        }
       }
     }
-    for (let yy = 0; yy < NY; yy += 2) for (let xx = 0; xx < NX; xx += 2) {
-      const i = yy * NX + xx
+    for (let yy = 0; yy < GRID_ROWS; yy += 2) {
+      for (let xx = 0; xx < GRID_COLUMNS; xx += 2) {
+      const i = yy * GRID_COLUMNS + xx
       const ridge = 1 - Math.exp(-this.potential[i] * 4.5)
-      const y = (Math.floor(i / NX) + .5) / NY * HEIGHT - HEIGHT / 2
-      const x = (xx + .5) / NX * WIDTH - WIDTH / 2
+      const y = (Math.floor(i / GRID_COLUMNS) + .5) / GRID_ROWS * WORLD_HEIGHT - WORLD_HEIGHT / 2
+      const x = (xx + .5) / GRID_COLUMNS * WORLD_WIDTH - WORLD_WIDTH / 2
       const digit = x < -1.6 ? 0 : x < -.32 ? 1 : x < .32 ? -1 : x < 1.6 ? 2 : 3
       const first = digit === -1 ? 252 : digit * 63, last = digit === -1 ? 254 : first + 63
       let distance2 = Infinity, strength = 0
@@ -175,50 +216,61 @@ export class Fluid {
       // A monotonic pickup tail removes off-coil local traps. This is a scalar
       // magnetic potential, not a particle destination or a position correction.
       const capture = strength > 0 ? -strength * Math.max(0, Math.sqrt(distance2) - .15) : 0
-      this.potential[i] = ridge * (2.8 + .26 * y) + this.reach[i] * (1 - .9 * ridge) + capture
+        this.potential[i] = ridge * (2.8 + .26 * y) + this.reach[i] * (1 - .9 * ridge) + capture
+      }
     }
-    for (let y = 0; y < NY; y += 2) for (let x = 1; x < NX; x += 2) {
-      this.potential[y * NX + x] = (this.potential[y * NX + x - 1] + this.potential[y * NX + Math.min(NX - 2, x + 1)]) * .5
+    for (let y = 0; y < GRID_ROWS; y += 2) {
+      for (let x = 1; x < GRID_COLUMNS; x += 2) {
+        this.potential[y * GRID_COLUMNS + x] = (this.potential[y * GRID_COLUMNS + x - 1] + this.potential[y * GRID_COLUMNS + Math.min(GRID_COLUMNS - 2, x + 1)]) * .5
+      }
     }
-    for (let y = 1; y < NY; y += 2) for (let x = 0; x < NX; x++) {
-      this.potential[y * NX + x] = (this.potential[(y - 1) * NX + x] + this.potential[Math.min(NY - 2, y + 1) * NX + x]) * .5
+    for (let y = 1; y < GRID_ROWS; y += 2) {
+      for (let x = 0; x < GRID_COLUMNS; x++) {
+        this.potential[y * GRID_COLUMNS + x] = (this.potential[(y - 1) * GRID_COLUMNS + x] + this.potential[Math.min(GRID_ROWS - 2, y + 1) * GRID_COLUMNS + x]) * .5
+      }
     }
     // Independently regulated colon coils prevent the lower dot from trapping
     // the entire charge during pickup. Feedback changes field power, never fluid.
     for (let dot = 0; dot < 2; dot++) {
-      const coil = this.coils[252 + dot]
+      const coil = this.coils[COILS_PER_DIGIT * 4 + dot]
       let nearby = 0
-      for (let i = COLON_START; i < COLON_START + COLON_PARTICLES; i++) if ((this.x[i] - coil.x) ** 2 + (this.y[i] - coil.y) ** 2 < .055) nearby += PARTICLE_MASS
+      for (let i = COLON_PARTICLE_START; i < COLON_PARTICLE_START + COLON_PARTICLE_COUNT; i++) {
+        if ((this.x[i] - coil.x) ** 2 + (this.y[i] - coil.y) ** 2 < .055) nearby += PARTICLE_MASS
+      }
       const demand = Math.max(.4, Math.min(3, 22.4 / (nearby + 1.12)))
       this.colonPower[dot] += (demand - this.colonPower[dot]) * (1 - Math.exp(-dt * 2))
-      for (let y = 0; y < NY; y++) for (let x = 0; x < NX; x++) {
-        const px = (x + .5) / NX * WIDTH - WIDTH / 2, py = (y + .5) / NY * HEIGHT - HEIGHT / 2
-        const r2 = px * px + (py - coil.y) ** 2
-        const shield = Math.max(0, 1 - (Math.abs(px) / .27) ** 8)
-        this.potential[y * NX + x] += shield * coil.current * this.colonPower[dot] * (1.6 * Math.exp(-r2 / .045) + .5 * Math.exp(-r2 / .35))
+      for (let y = 0; y < GRID_ROWS; y++) {
+        for (let x = 0; x < GRID_COLUMNS; x++) {
+          const px = (x + .5) / GRID_COLUMNS * WORLD_WIDTH - WORLD_WIDTH / 2, py = (y + .5) / GRID_ROWS * WORLD_HEIGHT - WORLD_HEIGHT / 2
+          const r2 = px * px + (py - coil.y) ** 2
+          const shield = Math.max(0, 1 - (Math.abs(px) / .27) ** 8)
+          this.potential[y * GRID_COLUMNS + x] += shield * coil.current * this.colonPower[dot] * (1.6 * Math.exp(-r2 / .045) + .5 * Math.exp(-r2 / .35))
+        }
       }
     }
   }
   update(dt: number) {
     this.age += dt
     this.fieldAccumulator += dt
-    if (this.fieldAccumulator >= 1 / 30 || dt === 0) {
+    if (this.fieldAccumulator >= 1 / FIELD_UPDATE_RATE || dt === 0) {
       this.updateCoils(this.fieldAccumulator)
       this.fieldAccumulator = 0
     }
     this.accumulator += dt
     let steps = 0
-    while (this.accumulator >= 1 / 120 && steps < 6) {
+    while (this.accumulator >= 1 / PARTICLE_UPDATE_RATE && steps < 6) {
       this.step()
-      this.accumulator -= 1 / 120
+      this.accumulator -= 1 / PARTICLE_UPDATE_RATE
       steps++
     }
-    this.accumulator = Math.min(this.accumulator, 1 / 30)
+    this.accumulator = Math.min(this.accumulator, 1 / FIELD_UPDATE_RATE)
     this.pack()
   }
+
+  // Particle integration and position-based constraints
   private step() {
-    const dt = 1 / 120
-    for (let i = 0; i < PARTICLES; i++) {
+    const dt = 1 / PARTICLE_UPDATE_RATE
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
       const x = this.x[i], y = this.y[i], e = .025
       // The blurred grid crosses separator edges. Sample within this bay's
       // interior so a neighboring field cannot pin fluid against the wall.
@@ -235,18 +287,18 @@ export class Fluid {
     // never leave the foreground plane, get deleted, or jump to a glyph target.
     for (let iteration = 0; iteration < 2; iteration++) {
       this.heads.fill(-1)
-      for (let i = 0; i < PARTICLES; i++) {
-        const cx = Math.max(0, Math.min(COLS - 1, Math.floor((this.x[i] + WIDTH / 2) / CELL)))
-        const cy = Math.max(0, Math.min(ROWS - 1, Math.floor((this.y[i] + HEIGHT / 2) / CELL)))
-        const cell = cy * COLS + cx
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const cx = Math.max(0, Math.min(COLLISION_COLUMNS - 1, Math.floor((this.x[i] + WORLD_WIDTH / 2) / CELL_SIZE)))
+        const cy = Math.max(0, Math.min(COLLISION_ROWS - 1, Math.floor((this.y[i] + WORLD_HEIGHT / 2) / CELL_SIZE)))
+        const cell = cy * COLLISION_COLUMNS + cx
         this.next[i] = this.heads[cell]; this.heads[cell] = i
       }
-      for (let i = 0; i < PARTICLES; i++) {
-        const cx = Math.max(0, Math.min(COLS - 1, Math.floor((this.x[i] + WIDTH / 2) / CELL)))
-        const cy = Math.max(0, Math.min(ROWS - 1, Math.floor((this.y[i] + HEIGHT / 2) / CELL)))
-        for (let yy = Math.max(0, cy - 1); yy <= Math.min(ROWS - 1, cy + 1); yy++) {
-          for (let xx = Math.max(0, cx - 1); xx <= Math.min(COLS - 1, cx + 1); xx++) {
-            for (let j = this.heads[yy * COLS + xx]; j !== -1; j = this.next[j]) {
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const cx = Math.max(0, Math.min(COLLISION_COLUMNS - 1, Math.floor((this.x[i] + WORLD_WIDTH / 2) / CELL_SIZE)))
+        const cy = Math.max(0, Math.min(COLLISION_ROWS - 1, Math.floor((this.y[i] + WORLD_HEIGHT / 2) / CELL_SIZE)))
+        for (let yy = Math.max(0, cy - 1); yy <= Math.min(COLLISION_ROWS - 1, cy + 1); yy++) {
+          for (let xx = Math.max(0, cx - 1); xx <= Math.min(COLLISION_COLUMNS - 1, cx + 1); xx++) {
+            for (let j = this.heads[yy * COLLISION_COLUMNS + xx]; j !== -1; j = this.next[j]) {
               if (j <= i) continue
               if (this.bayLeft[i] !== this.bayLeft[j]) continue
               const dx = this.x[j] - this.x[i], dy = this.y[j] - this.y[i]
@@ -270,42 +322,50 @@ export class Fluid {
         this.y[i] = Math.max(-1.37, Math.min(1.37, this.y[i]))
       }
     }
-    for (let i = 0; i < PARTICLES; i++) {
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
       this.vx[i] = (this.x[i] - this.oldX[i]) / dt
       this.vy[i] = (this.y[i] - this.oldY[i]) / dt
     }
   }
   private field(x: number, y: number) {
-    const gx = Math.max(0, Math.min(NX - 1.001, (x / WIDTH + .5) * NX - .5))
-    const gy = Math.max(0, Math.min(NY - 1.001, (y / HEIGHT + .5) * NY - .5))
+    const gx = Math.max(0, Math.min(GRID_COLUMNS - 1.001, (x / WORLD_WIDTH + .5) * GRID_COLUMNS - .5))
+    const gy = Math.max(0, Math.min(GRID_ROWS - 1.001, (y / WORLD_HEIGHT + .5) * GRID_ROWS - .5))
     const ix = Math.floor(gx), iy = Math.floor(gy), fx = gx - ix, fy = gy - iy
-    const i = iy * NX + ix, p = this.potential
-    return (p[i] * (1 - fx) + p[i + 1] * fx) * (1 - fy) + (p[i + NX] * (1 - fx) + p[i + NX + 1] * fx) * fy
+    const i = iy * GRID_COLUMNS + ix, p = this.potential
+    return (p[i] * (1 - fx) + p[i + 1] * fx) * (1 - fy) + (p[i + GRID_COLUMNS] * (1 - fx) + p[i + GRID_COLUMNS + 1] * fx) * fy
   }
+
+  // Surface reconstruction for the renderer
   private pack() {
     this.height.fill(0)
     // Compact-support, normalized splats: empty space is genuinely empty.
     // Every particle deposits its entire mass, including at the tank boundary.
-    for (let i = 0; i < PARTICLES; i++) {
-      const gx = (this.x[i] / WIDTH + .5) * SURFACE_NX - .5, gy = (this.y[i] / HEIGHT + .5) * SURFACE_NY - .5
-      const x0 = Math.max(0, Math.floor(gx - SPLAT_RADIUS)), x1 = Math.min(SURFACE_NX - 1, Math.ceil(gx + SPLAT_RADIUS))
-      const y0 = Math.max(0, Math.floor(gy - SPLAT_RADIUS)), y1 = Math.min(SURFACE_NY - 1, Math.ceil(gy + SPLAT_RADIUS))
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const gx = (this.x[i] / WORLD_WIDTH + .5) * SURFACE_COLUMNS - .5, gy = (this.y[i] / WORLD_HEIGHT + .5) * SURFACE_ROWS - .5
+      const x0 = Math.max(0, Math.floor(gx - SPLAT_RADIUS)), x1 = Math.min(SURFACE_COLUMNS - 1, Math.ceil(gx + SPLAT_RADIUS))
+      const y0 = Math.max(0, Math.floor(gy - SPLAT_RADIUS)), y1 = Math.min(SURFACE_ROWS - 1, Math.ceil(gy + SPLAT_RADIUS))
       let sum = 0
-      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-        const r2 = ((x - gx) ** 2 + (y - gy) ** 2) / (SPLAT_RADIUS * SPLAT_RADIUS)
-        if (r2 < 1) sum += (1 - r2) ** 3
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const r2 = ((x - gx) ** 2 + (y - gy) ** 2) / (SPLAT_RADIUS * SPLAT_RADIUS)
+          if (r2 < 1) sum += (1 - r2) ** 3
+        }
       }
-      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-        const r2 = ((x - gx) ** 2 + (y - gy) ** 2) / (SPLAT_RADIUS * SPLAT_RADIUS)
-        if (r2 < 1) this.height[y * SURFACE_NX + x] += PARTICLE_MASS * (1 - r2) ** 3 / sum
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const r2 = ((x - gx) ** 2 + (y - gy) ** 2) / (SPLAT_RADIUS * SPLAT_RADIUS)
+          if (r2 < 1) this.height[y * SURFACE_COLUMNS + x] += PARTICLE_MASS * (1 - r2) ** 3 / sum
+        }
       }
     }
-    for (let y = 0; y < SURFACE_NY; y++) for (let x = 0; x < SURFACE_NX; x++) {
-      const i = y * SURFACE_NX + x
-      // Convert cell mass to the original density units; do not change volume
-      // or kernel support when increasing the reconstruction resolution.
-      this.texture[i * 2] = this.height[i] * 4
-      this.texture[i * 2 + 1] = this.potential[Math.floor(y / 2) * NX + Math.floor(x / 2)]
+    for (let y = 0; y < SURFACE_ROWS; y++) {
+      for (let x = 0; x < SURFACE_COLUMNS; x++) {
+        const i = y * SURFACE_COLUMNS + x
+        // Convert cell mass to the original density units; do not change volume
+        // or kernel support when increasing the reconstruction resolution.
+        this.texture[i * 2] = this.height[i] * 4
+        this.texture[i * 2 + 1] = this.potential[Math.floor(y / 2) * GRID_COLUMNS + Math.floor(x / 2)]
+      }
     }
   }
 }

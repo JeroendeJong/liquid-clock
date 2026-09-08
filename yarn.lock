@@ -266,6 +266,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/node@npm:^26.5.0":
+  version: 26.5.0
+  resolution: "@types/node@npm:26.5.0"
+  dependencies:
+    undici-types: "npm:~8.9.0"
+  checksum: 10c0/1ab105dfe717f6442092ad8732d25d115fcf44596bb64009b3a6eb2dd988aef9ea76ad8a372e88cdf28800161681e1597c779451bade4428801f1a34129e5e37
+  languageName: node
+  linkType: hard
+
 "@types/react-dom@npm:^19.2.4":
   version: 19.2.7
   resolution: "@types/react-dom@npm:19.2.7"
@@ -516,6 +525,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "liquid-clock@workspace:."
   dependencies:
+    "@types/node": "npm:^26.5.0"
     "@types/react": "npm:^19.2.18"
     "@types/react-dom": "npm:^19.2.4"
     "@vitejs/plugin-react": "npm:^6.1.0"
@@ -830,6 +840,13 @@ __metadata:
     tsc: bin/tsc
     tsserver: bin/tsserver
   checksum: 10c0/2f25c74e65663c248fa1ade2b8459d9ce5372ff9dad07067310f132966ebec1d93f6c42f0baf77a6b6a7a91460463f708e6887013aaade22111037457c6b25df
+  languageName: node
+  linkType: hard
+
+"undici-types@npm:~8.9.0":
+  version: 8.9.0
+  resolution: "undici-types@npm:8.9.0"
+  checksum: 10c0/51c712c20c087368f62c6fc0f2bc49fa76bfe5dec28ff01584bb677ff29b0622569783c02d43e151143808c48c0503f804093bd2c491b10f2a830138034cb451
   languageName: node
   linkType: hard
 

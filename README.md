@@ -24,7 +24,7 @@ constraints resist compression, short-range attraction supplies cohesion, and
 velocity damping supplies viscosity. The cell walls contain the particles.
 There is no background layer, particle spawning, glyph targeting, or deletion.
 
-Particle resolution is controlled by `PARTICLE_DIAMETER` in `src/simulation.ts`,
+Particle resolution is controlled by `PARTICLE_DIAMETER` in `src/constants.ts`,
 currently 0.024 (half the original 0.048). The count scales inversely with diameter
 squared because motion is confined to a plane: half diameter means four times
 as many particles. Each now carries 0.28 mass units instead of 1.12, preserving
